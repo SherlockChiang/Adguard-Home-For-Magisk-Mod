@@ -1,0 +1,75 @@
+name: Auto Build & Release AGH
+
+# 触发条件：支持在 Actions 页面手动点击运行，或者当你 push 带有特定 tag 时触发
+on:
+  workflow_dispatch:
+    inputs:
+      release_msg:
+        description: '发布说明 (可选)'
+        required: false
+        default: '常规更新与同步'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate Tag & Version Info
+        id: prep
+        run: |
+          # 获取短 Hash 和当前日期，生成如 v20260327-a1b2c3d 的版本号
+          SHORT_HASH=$(git rev-parse --short HEAD)
+          TAG_NAME="v$(date +'%Y%m%d')-${SHORT_HASH}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          
+          # 获取最后一次提交的说明，作为 Changelog 的一部分
+          COMMIT_LOG=$(git log -1 --pretty=format:"%s")
+          echo "log=$COMMIT_LOG" >> $GITHUB_OUTPUT
+
+      - name: Build ZIP Module
+        run: |
+          # 1. 定义最终生成的压缩包名称
+          ZIP_NAME="AGH-Maodie-Companion-${{ steps.prep.outputs.tag }}.zip"
+          echo "📦 正在打包: $ZIP_NAME"
+          
+          # 2. 【核心细节】必须进入目录内部打包，确保 module.prop 在压缩包根目录
+          cd Adguardhome
+          
+          # -r9 表示递归打包并使用最高压缩率
+          zip -r9 "../$ZIP_NAME" .
+          
+          # 退回根目录
+          cd ..
+          
+          # 3. 检查文件是否生成成功并暴露环境变量
+          ls -lh "$ZIP_NAME"
+          echo "zip_file=$ZIP_NAME" >> $GITHUB_ENV
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: AGH 伴生版 ${{ steps.prep.outputs.tag }}
+          body: |
+            📦 **AdGuardHome - Maodie 专属伴生版**
+            
+            - 移除了底层 iptables 劫持与多余的轮询脚本，零性能损耗。
+            - 完美适配 Maodie (Mihomo) 的 TUN 模式与 Fake-IP。
+            - 手动触发的自动构建版本。
+            
+            ### 📝 更新日志 (Changelog):
+            - ${{ github.event.inputs.release_msg }}
+            - Git 同步: ${{ steps.prep.outputs.log }}
+          draft: false
+          prerelease: false
+          files: ${{ env.zip_file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
